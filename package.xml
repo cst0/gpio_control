@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>gpio_control</name>
+  <version>0.0.1</version>
+  <description>Control GPIO pins on Raspberry Pi, Nvidia Jetson, etc. from ROS</description>
+
+  <maintainer email="christopher.thierauf@tufts.edu">cst</maintainer>
+  <license>Apache 2.0</license>
+  <url type="website">https://github.com/cst0/gpio_control</url>
+
+  <build_depend>message_generation</build_depend>
+  <exec_depend>message_runtime</exec_depend>
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <export>
+  </export>
+
+</package>
