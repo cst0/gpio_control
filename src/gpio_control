@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 """
 Control GPIO pins via ROS. Made to be as generic as possible, allowing the same node to be
 used in multiple configurations/devices.
@@ -8,6 +9,8 @@ used in multiple configurations/devices.
 @license Apache 2.0
 
 """
+
+# core stuff
 import sys
 import rospy
 
@@ -19,8 +22,25 @@ import num2word
 from gpio_control.msg import InputState, OutputState
 from std_msgs.msg import Header
 
+# Valid imports are going to depend on our hardware and what's installed. We'll try to import
+# everything we might use, and if we fail, keep it in mind.
+_IMPORTED_PIGPIO = False
+_IMPORTED_ADAFRUIT_BBIO = False
+
+try:
+    import pigpio
+    _IMPORTED_PIGPIO = True
+except ImportError:
+    pass
+
+try:
+    import Adafruit_BBIO.GPIO as BBGPIO
+    _IMPORTED_ADAFRUIT_BBIO = True
+except ImportError:
+    pass
+
 # A list of devices we have support for
-_VALID_DEVICES = ['pi', 'jetson', 'file-system', 'simulated']
+_VALID_DEVICES = ['pi', 'jetson', 'beaglebone', 'file-system', 'simulated']
 
 # The rate at which to run the publisher at, if publishing on a cycle
 _RATE = 10
@@ -90,10 +110,20 @@ def configure_input(pin: int, device: str):
     if device in ('pi', 'jetson'):
         # These use the same pinout and can use the same driver (we'll use pigpio), so our lives
         # just got easier
-        import pigpio
+        if not _IMPORTED_PIGPIO:
+            rospy.logfatal("You want to control your device with pigpio, but it didn't import "
+                           "properly. Is it installed? Node will exit.")
+            sys.exit(2)
         return_input = GenericInputPin(pigpio.pi())
         return_input.get_func = return_input.obj.read(pin)
         return return_input
+    if device == 'beaglebone':
+        if not _IMPORTED_ADAFRUIT_BBIO:
+            rospy.logfatal("You want to control your device using the Adafruit BeagleBone Black "
+                           "GPIO library, but it didn't import properly. Is it installed? Node "
+                           "will exit.")
+            sys.exit(2)
+        return GenericInputPin(BBGPIO.setup(pin, BBGPIO.IN), BBGPIO.input(pin), BBGPIO.cleanup())
     if device == 'simulated':
         return GenericInputPin(None, get_=(lambda: True))
 
@@ -107,11 +137,25 @@ def configure_output(pin: int, device: str):
     """
     if device in ('pi', 'jetson'):
         # as with configure_input, we can use pigpio for both
-        import pigpio
+        if not _IMPORTED_PIGPIO:
+            rospy.logfatal("You want to control your device with pigpio, but it didn't import "
+                           "properly. Node will exit.")
+            sys.exit(2)
         return_output = GenericOutputPin(pigpio.pi())
         return_output.set_low_func = return_output.obj.write(pin, pigpio.LOW)
         return_output.set_high_func = return_output.obj.write(pin, pigpio.HIGH)
         return return_output
+    if device == 'beaglebone':
+        if not _IMPORTED_ADAFRUIT_BBIO:
+            rospy.logfatal("You want to control your device using the Adafruit BeagleBone Black "
+                           "GPIO library, but it didn't import properly. Is it installed? Node "
+                           "will exit.")
+            sys.exit(2)
+        return GenericOutputPin(
+            BBGPIO.setup(pin, BBGPIO.OUT),
+            BBGPIO.output(pin, BBGPIO.LOW),
+            BBGPIO.output(pin, BBGPIO.HIGH),
+            BBGPIO.cleanup())
     if device == 'simulated':
         return GenericOutputPin(None, set_high_=(lambda: print("[simulated] high!")),
                                 set_low_=(lambda: print("[simulated] low!")))
