@@ -14,9 +14,8 @@ import sys
 import rospy
 from src.gpio_control.src.gpio_control_utils import GpioControl, VALID_DEVICES
 
-if __name__ == '__main__':
-    import argparse
 
+def setup_parser():
     parser = argparse.ArgumentParser()
     direction_group = parser.add_mutually_exclusive_group()
     direction_group.add_argument('--input', action='store_true', help='Set the pin as an input, '
@@ -37,25 +36,48 @@ if __name__ == '__main__':
     pin_id_group.add_argument('--pin-name', type=str, help='The pin to be manipulated, as a '
                                                            'string. Either pin-number or pin-name '
                                                            'must be specified.')
+
     parser.add_argument('--device', type=str,
-                        help='hardware device to use. Valid devices: ' + str(VALID_DEVICES) + '. '
-                        'file-system should support all Linux devices but should be used with '
-                        'caution, simulated will only print to the screen and is not useful '
-                        'in production.')
+                        help='hardware device to use. Valid devices: ' + str(VALID_DEVICES) +
+                             '. file-system should support all Linux devices but should be used '
+                             'with caution as there are no safety checks, simulated will only '
+                             'print to the screen and is not useful in production.')
 
-    args = parser.parse_args(rospy.myargv()[1:])
+    parser.add_argument('--rate', type=int, help='Rate at which to run this node. Default: 10.')
 
-    rospy.init_node("gpio_control_pin_" + str(args.pin), anonymous=False)
-    rospy.loginfo("Hello! Setting up to control GPIO pin " + str(args.pin))
+    return parser
 
-    if args.device is None:
+
+def check_valid_args(local_args):
+    if local_args.pin_name is not None:
+        local_pin = local_args.pin_name
+    elif local_args.pin_number is not None:
+        local_pin = local_args.pin_number
+    else:
+        rospy.logfatal("What pin should be used? Specify using either --pin-number or --pin-name.")
+        sys.exit(1)
+
+    if local_args.device is None:
         rospy.logwarn("No device was specified, so we're assuming nothing and closing.")
         sys.exit(1)
-    if not args.input and not args.output:
-        rospy.logerr("Error: is this an input or an output? Specify using --input or --output.")
+    if not local_args.input and not local_args.output:
+        rospy.logerr("Ss this an input or an output? Specify using --input or --output.")
         sys.exit(1)
 
-    gpio = GpioControl(args.input, args.device, pin_num=args.pin)
-    gpio.spin()
+    return local_pin
 
-    rospy.loginfo("Manager for GPIO " + str(args.pin) + " stopping. Goodbye!")
+
+if __name__ == '__main__':
+    import argparse
+
+    args = setup_parser().parse_args(rospy.myargv()[1:])
+    pin = check_valid_args(args)
+
+    rospy.init_node("gpio_control_pin_" + str(pin), anonymous=False)
+    rospy.loginfo("Hello! Setting up to control GPIO pin " + str(pin))
+
+    gpio = GpioControl(args.device)
+    gpio.add_pin(args.input, pin_num=args.pin_number, pin_name=args.pin_number)
+    gpio.spin(args.rate)
+
+    rospy.loginfo("Manager for GPIO " + str(pin) + " stopping. Goodbye!")
