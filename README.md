@@ -1,5 +1,7 @@
 # gpio\_control: a ROS package for reading/writing GPIO states on Raspberry Pi, Jetson, etc.
 ## Overview
+_This package is currently unstable and in testing_
+
 Devices such as the Raspberry Pi, NVidia Jetson, BeagleBone Black, etc have GPIO pins as an additional set of IO,
 which can be toggled between high/low states or configured to read high/low inputs. This package allows for
 ROS control of these pins, allowing for configuring each pin as desired and then reading/writing

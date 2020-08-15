@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+
+"""
+Control GPIO pins via ROS. Made to be as generic as possible, allowing the same node to be
+used in multiple configurations/devices.
+
+@author cst <chris thierauf, christopher.thierauf@tufts.edu>
+@version 0.0.1
+@license Apache 2.0
+@copyright Christopher Thierauf 2020.
+This copyright is used to release the code in accordance with the license of this repository.
+"""
+import sys
+import rospy
+from src.gpio_control.src.gpio_control_utils import GpioControl, VALID_DEVICES
+
+if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    direction_group = parser.add_mutually_exclusive_group()
+    direction_group.add_argument('--input', action='store_true', help='Set the pin as an input, '
+                                                                      'allowing this node to '
+                                                                      'publish the current state '
+                                                                      'of the pin. Either --input '
+                                                                      'or --output must be used.')
+    direction_group.add_argument('--output', action='store_true', help='Set the pin as an output, '
+                                                                       'allowing this node to set '
+                                                                       'up a subscriber to '
+                                                                       'control the state of the '
+                                                                       'pin. Either --input or '
+                                                                       '--output must be used.')
+    pin_id_group = parser.add_mutually_exclusive_group()
+    pin_id_group.add_argument('--pin-number', type=int, help='The pin to be manipulated, as a '
+                                                             'number. Either pin-number or '
+                                                             'pin-name must be specified.')
+    pin_id_group.add_argument('--pin-name', type=str, help='The pin to be manipulated, as a '
+                                                           'string. Either pin-number or pin-name '
+                                                           'must be specified.')
+    parser.add_argument('--device', type=str,
+                        help='hardware device to use. Valid devices: ' + str(VALID_DEVICES) + '. '
+                        'file-system should support all Linux devices but should be used with '
+                        'caution, simulated will only print to the screen and is not useful '
+                        'in production.')
+
+    args = parser.parse_args(rospy.myargv()[1:])
+
+    rospy.init_node("gpio_control_pin_" + str(args.pin), anonymous=False)
+    rospy.loginfo("Hello! Setting up to control GPIO pin " + str(args.pin))
+
+    if args.device is None:
+        rospy.logwarn("No device was specified, so we're assuming nothing and closing.")
+        sys.exit(1)
+    if not args.input and not args.output:
+        rospy.logerr("Error: is this an input or an output? Specify using --input or --output.")
+        sys.exit(1)
+
+    gpio = GpioControl(args.input, args.device, pin_num=args.pin)
+    gpio.spin()
+
+    rospy.loginfo("Manager for GPIO " + str(args.pin) + " stopping. Goodbye!")

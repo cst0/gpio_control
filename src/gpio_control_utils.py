@@ -7,7 +7,8 @@ used in multiple configurations/devices.
 @author cst <chris thierauf, christopher.thierauf@tufts.edu>
 @version 0.0.1
 @license Apache 2.0
-
+@copyright Christopher Thierauf 2020.
+This copyright is used to release the code in accordance with the license of this repository.
 """
 
 # core stuff
@@ -22,6 +23,9 @@ import num2word
 from gpio_control.msg import InputState, OutputState
 from std_msgs.msg import Header
 
+# A list of devices we have support for
+VALID_DEVICES = ['pi', 'jetson', 'beaglebone', 'onion', 'file-system', 'simulated']
+
 # Valid imports are going to depend on our hardware and what's installed. We'll try to import
 # everything we might use, and if we fail, keep it in mind.
 _IMPORTED_PIGPIO = False
@@ -30,30 +34,26 @@ _IMPORTED_ONION_GPIO = False
 
 try:
     import pigpio
+
     _IMPORTED_PIGPIO = True
 except ImportError:
     pass
 
 try:
     import Adafruit_BBIO.GPIO as BBGPIO
+
     _IMPORTED_ADAFRUIT_BBIO = True
 except ImportError:
     pass
 
 try:
     import onionGpio
+
     _IMPORTED_ONION_GPIO = True
 except ImportError:
     pass
 
-# A list of devices we have support for
-_VALID_DEVICES = ['pi', 'jetson', 'beaglebone', 'onion', 'file-system', 'simulated']
-
-# The rate at which to run the publisher at, if publishing on a cycle
-_RATE = 10
-
-
-class GenericOutputPin:
+class _GenericOutputPin:
     """
     Class to provide consistent function calls to different pin outputs.
 
@@ -84,7 +84,7 @@ class GenericOutputPin:
             self.additional_shutdown()
 
 
-class GenericInputPin:
+class _GenericInputPin:
     """
     Class to provide consistent function calls to different pin inputs.
 
@@ -107,7 +107,7 @@ class GenericInputPin:
             self.additional_shutdown()
 
 
-def configure_input(pin: int, device: str):
+def _configure_input(pin, device: str):
     """
     Configure the node as an input. Takes in a pin to access, and a string which is what was
     passed in at the command line.
@@ -121,7 +121,7 @@ def configure_input(pin: int, device: str):
             rospy.logfatal("You want to control your device with pigpio, but it didn't import "
                            "properly. Is it installed? Node will exit.")
             sys.exit(2)
-        return_input = GenericInputPin(pigpio.pi())
+        return_input = _GenericInputPin(pigpio.pi())
         return_input.get_func = return_input.obj.read(pin)
         return return_input
     if device == 'beaglebone':
@@ -130,24 +130,44 @@ def configure_input(pin: int, device: str):
                            "GPIO library, but it didn't import properly. Is it installed? Node "
                            "will exit.")
             sys.exit(2)
-        return GenericInputPin(BBGPIO.setup(pin, BBGPIO.IN), BBGPIO.input(pin), BBGPIO.cleanup())
+        return _GenericInputPin(BBGPIO.setup(pin, BBGPIO.IN), BBGPIO.input(pin), BBGPIO.cleanup())
     if device == 'onion':
         if not _IMPORTED_ONION_GPIO:
             rospy.logfatal("You want to control your device using the Onion Omega "
                            "GPIO library, but it didn't import properly. Is it installed? Node "
                            "will exit.")
             sys.exit(2)
-        return_input = GenericInputPin(onionGpio.OnionGpio(pin))
+        return_input = _GenericInputPin(onionGpio.OnionGpio(pin))
         return_input.obj.setInputDirection()
         return_input.get_func = return_input.obj.getValue
         return return_input
+    if device == 'file-system':
+        def open_pin():
+            exporter = open('/sys/class/gpio/export', 'w')
+            exporter.write(str(pin))
+            exporter.close()
+            direction = open('/sys/class/gpio'+str(pin)+'/direction', 'w')
+            direction.write('in')
+            direction.close()
+
+        def get_pin():
+            pass
+
+        def close_pin():
+            unexporter = open('/sys/class/gpio/unexport', 'w')
+            unexporter.write(str(pin))
+            unexporter.close()
+
+        return _GenericInputPin(open_pin,
+                                get_pin,
+                                additional_shutdown=close_pin)
     if device == 'simulated':
-        return GenericInputPin(None, get_=(lambda: True))
+        return _GenericInputPin(None, get_=(lambda: True))
 
-    raise RuntimeError('Device was invalid: '+device)
+    raise RuntimeError('Device was invalid: ' + device)
 
 
-def configure_output(pin: int, device: str):
+def _configure_output(pin: int, device: str):
     """
     Configure the node as an output. Takes in a pin to access, and a string which is what was
     passed in at the command line.
@@ -158,7 +178,7 @@ def configure_output(pin: int, device: str):
             rospy.logfatal("You want to control your device with pigpio, but it didn't import "
                            "properly. Node will exit.")
             sys.exit(2)
-        return_output = GenericOutputPin(pigpio.pi())
+        return_output = _GenericOutputPin(pigpio.pi())
         return_output.set_low_func = return_output.obj.write(pin, pigpio.LOW)
         return_output.set_high_func = return_output.obj.write(pin, pigpio.HIGH)
         return return_output
@@ -168,7 +188,7 @@ def configure_output(pin: int, device: str):
                            "GPIO library, but it didn't import properly. Is it installed? Node "
                            "will exit.")
             sys.exit(2)
-        return GenericOutputPin(
+        return _GenericOutputPin(
             BBGPIO.setup(pin, BBGPIO.OUT),
             BBGPIO.output(pin, BBGPIO.LOW),
             BBGPIO.output(pin, BBGPIO.HIGH),
@@ -179,18 +199,41 @@ def configure_output(pin: int, device: str):
             rospy.logfatal("You want to control your device with pigpio, but it didn't import "
                            "properly. Node will exit.")
             sys.exit(2)
-        return_output = GenericOutputPin(onionGpio.OnionGpio(pin))
+        return_output = _GenericOutputPin(onionGpio.OnionGpio(pin))
         return_output.obj.setOutputDirection()
         return_output.set_low_func = return_output.obj.setValue(0)
         return_output.set_high_func = return_output.obj.setValue(1)
         return return_output
+    if device == 'file-system':
+        def open_pin():
+            exporter = open('/sys/class/gpio/export', 'w')
+            exporter.write(str(pin))
+            exporter.close()
+            direction = open('/sys/class/gpio'+str(pin)+'/direction', 'w')
+            direction.write('in')
+            direction.close()
+
+        def set_low():
+
+            pass
+
+        def set_high():
+            pass
+
+        def close_pin():
+            unexporter = open('/sys/class/gpio/unexport', 'w')
+            unexporter.write(str(pin))
+            unexporter.close()
+
+        return _GenericOutputPin(open_pin(), set_low(), set_high(), additional_shutdown=close_pin())
+
     if device == 'simulated':
-        return GenericOutputPin(None, set_high_=(lambda: print("[simulated] high!")),
-                                set_low_=(lambda: print("[simulated] low!")))
-    raise RuntimeError('Device was invalid: '+device)
+        return _GenericOutputPin(None, set_high_=(lambda: print("[simulated] high!")),
+                                 set_low_=(lambda: print("[simulated] low!")))
+    raise RuntimeError('Device was invalid: ' + device)
 
 
-def configure_publisher(_input_pin: GenericInputPin, pin: int):
+def _configure_publisher(_input_pin: _GenericInputPin, pin: int, publisher_rate: int = 10):
     """
     Set up a publisher, which we'll be using to display the current state of the input pin.
 
@@ -203,7 +246,7 @@ def configure_publisher(_input_pin: GenericInputPin, pin: int):
         publisher = rospy.Publisher("gpio_inputs/" + num2word.word(pin).lower(),
                                     InputState,
                                     queue_size=1)
-        rate = rospy.Rate(_RATE)
+        rate = rospy.Rate(publisher_rate)
 
         # Here's where we're doing the actual spinning: read the pin, set up a message, publish,
         # rate.sleep(), repeat.
@@ -225,7 +268,7 @@ def configure_publisher(_input_pin: GenericInputPin, pin: int):
     return read_and_publish_spinner
 
 
-def configure_subscriber(_output_pin: GenericOutputPin, pin: int):
+def _configure_subscriber(_output_pin: _GenericOutputPin, pin: int):
     """
     Set up a subscriber, which we'll be using to receive a new state to set the GPIO pin to.
 
@@ -252,30 +295,31 @@ class GpioControl:
     """
     Generic control of a GPIO device. Wraps the setup and then provides a spinner to run.
     """
-    def __init__(self, is_input: True, pin: int, device: str):
-        self.is_input = is_input
-        self.pin = pin
-        self.device = device
 
-        if device not in _VALID_DEVICES:
+    def __init__(self, is_input: bool, device: str, pin_num: int = None, pin_name: str = None):
+        self.is_input = is_input
+        self._pin = pin_num if pin_num is not None else pin_name
+        self._device = device
+
+        if device not in VALID_DEVICES:
             rospy.logerr("I don't know that device (" + device + "). Valid devices: " + str(
-                _VALID_DEVICES) + "\nExiting.")
+                VALID_DEVICES) + "\nExiting.")
             sys.exit(1)
 
         if is_input:  # if we're an input, configure as an input and set up a publisher
-            self.input_pin = configure_input(pin, device)
-            self.spinner = configure_publisher(self.input_pin, pin)
-        else:         # if we're an output, configure as an output and set up a subscriber
-            self.output_pin = configure_output(pin, device)
-            self.spinner = configure_subscriber(self.output_pin, pin)
+            self._input_pin_obj = _configure_input(self._pin, device)
+            self._spinner = _configure_publisher(self._input_pin_obj, self._pin)
+        else:  # if we're an output, configure as an output and set up a subscriber
+            self._output_pin_obj = _configure_output(self._pin, device)
+            self._spinner = _configure_subscriber(self._output_pin_obj, self._pin)
 
     def __del__(self):
         if not self.is_input:  # if not an input, meaning it's an output
-            self.output_pin.close()
+            self._output_pin_obj.close()
 
     def spin(self):
         """ Wrapping the spinner function. """
-        self.spinner()
+        self._spinner()
 
     def set_pin(self, state: bool):
         """
@@ -284,9 +328,9 @@ class GpioControl:
         if self.is_input:
             raise EnvironmentError('This pin is set up as an input, not an output!')
         if state:
-            self.output_pin.set_high()
+            self._output_pin_obj.set_high()
         else:
-            self.output_pin.set_low()
+            self._output_pin_obj.set_low()
 
     def get_pin(self):
         """
@@ -294,44 +338,4 @@ class GpioControl:
         """
         if not self.is_input:
             raise EnvironmentError('This pin is set up as an output, not an input!')
-        return self.input_pin.get()
-
-
-if __name__ == '__main__':
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument('--input', action='store_true', help='Set the pin as an input, allowing '
-                                                            'this node to publish the current '
-                                                            'state of the pin. Either --input or '
-                                                            '--output must be used.')
-    group.add_argument('--output', action='store_true', help='Set the pin as an output, allowing '
-                                                             'this node to set up a subscriber to '
-                                                             'control the state of the pin. '
-                                                             'Either --input or --output must be '
-                                                             'used.')
-    parser.add_argument('pin', type=int, help='pin to be manipulated')
-    parser.add_argument('--device', type=str,
-                        help='hardware device to use. Valid devices: ' + str(_VALID_DEVICES) + '. '
-                        'file-system should support all Linux devices but should be used with '
-                        'caution, simulated will only print to the screen and is not useful '
-                        'in production.')
-
-    args = parser.parse_args(rospy.myargv()[1:])
-
-    rospy.init_node("gpio_control_pin_" + str(args.pin), anonymous=False)
-    rospy.loginfo("Hello! Setting up to control GPIO pin " + str(args.pin))
-
-    if args.device is None:
-        rospy.logwarn(
-            "No device was specified, so we're assuming nothing and closing.")
-        sys.exit(1)
-    if not args.input and not args.output:
-        rospy.logerr("Error: is this an input or an output? Specify using --input or --output.")
-        sys.exit(1)
-
-    gpio = GpioControl(args.input, args.pin, args.device)
-    gpio.spin()
-
-    rospy.loginfo("Manager for GPIO " + str(args.pin) + " stopping. Goodbye!")
+        return self._input_pin_obj.get()
