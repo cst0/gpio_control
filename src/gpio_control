@@ -2,6 +2,11 @@
 """
 Control GPIO pins via ROS. Made to be as generic as possible, allowing the same node to be
 used in multiple configurations/devices.
+
+@author cst <chris thierauf, christopher.thierauf@tufts.edu>
+@version 0.0.1
+@license Apache 2.0
+
 """
 import sys
 import rospy
@@ -14,7 +19,10 @@ import num2word
 from gpio_control.msg import InputState, OutputState
 from std_msgs.msg import Header
 
+# A list of devices we have support for
 _VALID_DEVICES = ['pi', 'jetson', 'file-system', 'simulated']
+
+# The rate at which to run the publisher at, if publishing on a cycle
 _RATE = 10
 
 
@@ -77,6 +85,8 @@ def configure_input(pin: int, device: str):
     Configure the node as an input. Takes in a pin to access, and a string which is what was
     passed in at the command line.
     """
+
+    # Run through our options, configure the generic input interfaces, and then return.
     if device in ('pi', 'jetson'):
         # These use the same pinout and can use the same driver (we'll use pigpio), so our lives
         # just got easier
@@ -86,7 +96,8 @@ def configure_input(pin: int, device: str):
         return return_input
     if device == 'simulated':
         return GenericInputPin(None, get_=(lambda: True))
-    return None
+
+    raise RuntimeError('Device was invalid: '+device)
 
 
 def configure_output(pin: int, device: str):
@@ -95,7 +106,7 @@ def configure_output(pin: int, device: str):
     passed in at the command line.
     """
     if device in ('pi', 'jetson'):
-        # as before, we can use pigpio for both
+        # as with configure_input, we can use pigpio for both
         import pigpio
         return_output = GenericOutputPin(pigpio.pi())
         return_output.set_low_func = return_output.obj.write(pin, pigpio.LOW)
@@ -104,7 +115,7 @@ def configure_output(pin: int, device: str):
     if device == 'simulated':
         return GenericOutputPin(None, set_high_=(lambda: print("[simulated] high!")),
                                 set_low_=(lambda: print("[simulated] low!")))
-    return None
+    raise RuntimeError('Device was invalid: '+device)
 
 
 def configure_publisher(_input_pin: GenericInputPin, pin: int):
@@ -116,11 +127,14 @@ def configure_publisher(_input_pin: GenericInputPin, pin: int):
     """
 
     def read_and_publish_spinner():
-        publisher = rospy.Publisher("gpio/inputs/" + num2word.word(pin).lower(),
+        # Set up a publisher, where the name is gpio_inputs plus the name of the pin
+        publisher = rospy.Publisher("gpio_inputs/" + num2word.word(pin).lower(),
                                     InputState,
                                     queue_size=1)
         rate = rospy.Rate(_RATE)
 
+        # Here's where we're doing the actual spinning: read the pin, set up a message, publish,
+        # rate.sleep(), repeat.
         while not rospy.is_shutdown():
             val = _input_pin.get_func()
             header = Header()
@@ -154,7 +168,9 @@ def configure_subscriber(_output_pin: GenericOutputPin, pin: int):
         else:
             rospy.logerr("Not sure how to deal with " + str(msg))
 
-    rospy.Subscriber("gpio/outputs/" + num2word.word(pin).lower(), OutputState,
+    # Create a subscriber, where the name is gpio_outputs plus the name of the pin
+    rospy.Subscriber("gpio_outputs/" + num2word.word(pin).lower(),
+                     OutputState,
                      subscriber_callback)
 
     return rospy.spin()
@@ -168,19 +184,21 @@ class GpioControl:
         self.is_input = is_input
         self.pin = pin
         self.device = device
+
         if device not in _VALID_DEVICES:
             rospy.logerr("I don't know that device (" + device + "). Valid devices: " + str(
                 _VALID_DEVICES) + "\nExiting.")
             sys.exit(1)
-        if is_input:
+
+        if is_input:  # if we're an input, configure as an input and set up a publisher
             self.input_pin = configure_input(pin, device)
             self.spinner = configure_publisher(self.input_pin, pin)
-        else:
+        else:         # if we're an output, configure as an output and set up a subscriber
             self.output_pin = configure_output(pin, device)
             self.spinner = configure_subscriber(self.output_pin, pin)
 
     def __del__(self):
-        if not self.is_input:
+        if not self.is_input:  # if not an input, meaning it's an output
             self.output_pin.close()
 
     def spin(self):
@@ -212,11 +230,21 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     group = parser.add_mutually_exclusive_group()
-    group.add_argument('--input', action='store_true')
-    group.add_argument('--output', action='store_true')
+    group.add_argument('--input', action='store_true', help='Set the pin as an input, allowing '
+                                                            'this node to publish the current '
+                                                            'state of the pin. Either --input or '
+                                                            '--output must be used.')
+    group.add_argument('--output', action='store_true', help='Set the pin as an output, allowing '
+                                                             'this node to set up a subscriber to '
+                                                             'control the state of the pin. '
+                                                             'Either --input or --output must be '
+                                                             'used.')
     parser.add_argument('pin', type=int, help='pin to be manipulated')
     parser.add_argument('--device', type=str,
-                        help='hardware device to use. Valid devices: ' + str(_VALID_DEVICES))
+                        help='hardware device to use. Valid devices: ' + str(_VALID_DEVICES) + '. '
+                        'file-system should support all Linux devices but should be used with '
+                        'caution, simulated will only print to the screen and is not useful '
+                        'in production.')
 
     args = parser.parse_args(rospy.myargv()[1:])
 
