@@ -26,6 +26,7 @@ from std_msgs.msg import Header
 # everything we might use, and if we fail, keep it in mind.
 _IMPORTED_PIGPIO = False
 _IMPORTED_ADAFRUIT_BBIO = False
+_IMPORTED_ONION_GPIO = False
 
 try:
     import pigpio
@@ -39,8 +40,14 @@ try:
 except ImportError:
     pass
 
+try:
+    import onionGpio
+    _IMPORTED_ONION_GPIO = True
+except ImportError:
+    pass
+
 # A list of devices we have support for
-_VALID_DEVICES = ['pi', 'jetson', 'beaglebone', 'file-system', 'simulated']
+_VALID_DEVICES = ['pi', 'jetson', 'beaglebone', 'onion', 'file-system', 'simulated']
 
 # The rate at which to run the publisher at, if publishing on a cycle
 _RATE = 10
@@ -124,6 +131,16 @@ def configure_input(pin: int, device: str):
                            "will exit.")
             sys.exit(2)
         return GenericInputPin(BBGPIO.setup(pin, BBGPIO.IN), BBGPIO.input(pin), BBGPIO.cleanup())
+    if device == 'onion':
+        if not _IMPORTED_ONION_GPIO:
+            rospy.logfatal("You want to control your device using the Onion Omega "
+                           "GPIO library, but it didn't import properly. Is it installed? Node "
+                           "will exit.")
+            sys.exit(2)
+        return_input = GenericInputPin(onionGpio.OnionGpio(pin))
+        return_input.obj.setInputDirection()
+        return_input.get_func = return_input.obj.getValue
+        return return_input
     if device == 'simulated':
         return GenericInputPin(None, get_=(lambda: True))
 
@@ -156,6 +173,17 @@ def configure_output(pin: int, device: str):
             BBGPIO.output(pin, BBGPIO.LOW),
             BBGPIO.output(pin, BBGPIO.HIGH),
             BBGPIO.cleanup())
+    if device == 'onion':
+        # as with configure_input, we can use pigpio for both
+        if not _IMPORTED_PIGPIO:
+            rospy.logfatal("You want to control your device with pigpio, but it didn't import "
+                           "properly. Node will exit.")
+            sys.exit(2)
+        return_output = GenericOutputPin(onionGpio.OnionGpio(pin))
+        return_output.obj.setOutputDirection()
+        return_output.set_low_func = return_output.obj.setValue(0)
+        return_output.set_high_func = return_output.obj.setValue(1)
+        return return_output
     if device == 'simulated':
         return GenericOutputPin(None, set_high_=(lambda: print("[simulated] high!")),
                                 set_low_=(lambda: print("[simulated] low!")))
