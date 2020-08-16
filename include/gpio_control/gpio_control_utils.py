@@ -255,43 +255,57 @@ def _configure_output(pin: int, device: str):
     raise RuntimeError('Device was invalid: ' + device)
 
 
-def _configure_publisher(_input_pin: _GenericInputPin, pin: int):
-    """
-    Set up a publisher, which we'll be using to display the current state of the input pin.
+def _to_valid_ros_topic_name(input_string):
+    """ Convert input to a valid ROS name (alphabetic)"""
 
-    First, we set up a class, which allows us to create a spinner which will check the state of
-    the pin, publish it, and sleep at the amount specified by the rate.
-    """
+    # Don't bother dealing with things that are just numbers, convert them right away
+    if type(input_string) == int or input_string.isnumeric():
+        return num2word.word(int(input_string)).lower()
 
-    publisher = rospy.Publisher("gpio_inputs/" + num2word.word(pin).lower(),
-                                InputState,
-                                queue_size=1)
+    # If it's alphabetic, convert numbers to characters, append numbers, and separate the
+    # two using underscores. Creates something like P8U4 -> p_eight_u_4
+    output_string = ""
+    just_did_str = False
+    just_did_num = False
+    for character in input_string:
+        if character.isalpha():
+            if just_did_num:
+                output_string += '_'
+                just_did_num = False
+            output_string += character.lower()
+            just_did_str = True
+        elif character.isnumeric():
+            if just_did_str:
+                output_string += '_'
+                just_did_str = False
+            output_string += num2word.word(character).lower()
+            just_did_num = True
+        else:
+            # Don't bother putting in special characters (even though I don't think they'll come up)
+            pass
 
-    # Return the function itself, not the return val of the function
-    return publisher
+    return output_string
 
 
-def _configure_subscriber(_output_pin: _GenericOutputPin, pin: int):
+def _configure_subscriber(_output_pin: _GenericOutputPin, pin):
     """
     Set up a subscriber, which we'll be using to receive a new state to set the GPIO pin to.
 
     First, we'll set up a function to be the callback for the subscriber.
     """
 
-    class subscriber_class:
-        def subscriber_callback(self, msg):
-            if msg.state:
-                _output_pin.set_high_func()
-            elif not msg.state:
-                _output_pin.set_low_func()
-            else:
-                rospy.logerr("Not sure how to deal with " + str(msg))
 
-    # Create a subscriber, where the name is gpio_outputs plus the name of the pin
-    this_subscriber = subscriber_class()
-    return rospy.Subscriber("gpio_outputs/" + num2word.word(pin).lower(),
-                     OutputState,
-                     this_subscriber.subscriber_callback)
+class output_pin_subscriber:
+    def __init__(self, output_pin):
+        self._output_pin = output_pin
+
+    def subscriber_callback(self, msg):
+        if msg.state:
+            self._output_pin.set_high_func()
+        elif not msg.state:
+            self._output_pin.set_low_func()
+        else:
+            rospy.logerr("Not sure how to deal with " + str(msg))
 
 
 class GpioControl:
@@ -303,7 +317,7 @@ class GpioControl:
         self._device = device
         self._publishers = {}
         self._generic_pin_objects = {}
-        self._subscribers = []
+        self._subscribers = {}
 
         if device not in VALID_DEVICES:
             rospy.logerr("I don't know that device (" + device + "). Valid devices: " +
@@ -318,13 +332,19 @@ class GpioControl:
         """ Add a pin to perform input IO operations. """
         input_pin_obj = _configure_input(pin, self._device)
         self._generic_pin_objects[pin] = input_pin_obj
-        self._publishers[pin] = _configure_publisher(input_pin_obj, pin)
+        self._publishers[pin] = rospy.Publisher("gpio_inputs/" + _to_valid_ros_topic_name(pin),
+                                                InputState,
+                                                queue_size=1)
 
     def add_output_pin(self, pin):
         """ Add a pin to perform output IO operations. """
         output_pin_obj = _configure_output(pin, self._device)
+
         self._generic_pin_objects[pin] = output_pin_obj
-        self._subscribers.append(_configure_subscriber(output_pin_obj, pin))
+        this_subscriber = output_pin_subscriber(output_pin_obj)
+        self._subscribers[pin] = rospy.Subscriber("gpio_outputs/" + _to_valid_ros_topic_name(pin),
+                                                  OutputState,
+                                                  this_subscriber.subscriber_callback)
 
     def spin(self, rate_val: int = None):
         """ Wrapping the spinner function. """

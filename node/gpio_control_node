@@ -14,8 +14,9 @@ import sys
 import rospy
 import argparse
 
-sys.path.insert(0, '')
-from src.gpio_control.ros_gpio_control_src import GpioControl, VALID_DEVICES
+# If your IDE is complaining about this line, make sure you've set
+# <catkin_ws>/install/lib/dist-packages as a source
+from gpio_control.gpio_control_utils import GpioControl, VALID_DEVICES
 
 
 def setup_parser():
@@ -45,7 +46,7 @@ def check_valid_args(local_args):
         rospy.logwarn("No device was specified, so we're assuming nothing and closing.")
         sys.exit(1)
     if not local_args.input and not local_args.output:
-        rospy.logerr("Ss this an input or an output? Specify using --input or --output.")
+        rospy.logerr("Is this an input or an output? Specify using --input or --output.")
         sys.exit(1)
 
 
@@ -67,6 +68,6 @@ if __name__ == '__main__':
 
     gpio.spin(args.rate)
 
-    rospy.loginfo("Manager for GPIO pins" +
-                  str(args.input) + str(args.output) +
+    rospy.loginfo("Manager for GPIO pins " +
+                  str(args.input + args.output) +
                   " stopping. Goodbye!")
