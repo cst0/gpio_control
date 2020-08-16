@@ -16,6 +16,7 @@ obligated to provide attribution, but it would be greatly appreciated.
 """
 
 # core stuff
+import random
 import sys
 import rospy
 
@@ -42,18 +43,21 @@ _IMPORTED_ONION_GPIO = False
 
 try:
     import pigpio
+
     _IMPORTED_PIGPIO = True
 except ImportError:
     pass
 
 try:
     import Adafruit_BBIO.GPIO as BBGPIO
+
     _IMPORTED_ADAFRUIT_BBIO = True
 except ImportError:
     pass
 
 try:
     import onionGpio
+
     _IMPORTED_ONION_GPIO = True
 except ImportError:
     pass
@@ -73,13 +77,12 @@ class _GenericOutputPin:
     please feel free to open an issue on the tracker so I can work with you on that.
     """
 
-    def __init__(self, configured_pinbus_object, pin, set_high_=None, set_low_=None, additional_shutdown=None):
+    def __init__(self, configured_pinbus_object, pin, set_high_=None, set_low_=None):
         self.type = 'output'
         if configured_pinbus_object is not None:
             self.configured_pinbus_object = configured_pinbus_object
         self.set_high_func = set_high_
         self.set_low_func = set_low_
-        self.additional_shutdown = additional_shutdown
         self.pin = pin
 
     def set_low(self):
@@ -93,8 +96,6 @@ class _GenericOutputPin:
     def close(self):
         """ Make sure we're cleaning up while we shut down here """
         self.set_low()
-        if self.additional_shutdown is not None:
-            self.additional_shutdown()
 
 
 class _GenericInputPin:
@@ -104,22 +105,16 @@ class _GenericInputPin:
     As before, takes in functions to be called later.
     """
 
-    def __init__(self, configured_pinbus_object, pin, get_=None, additional_shutdown=None):
+    def __init__(self, configured_pinbus_object, pin, get_=None):
         self.type = 'input'
         if configured_pinbus_object is not None:
             self.configured_pinbus_object = configured_pinbus_object
         self.get_func = get_
-        self.additional_shutdown = additional_shutdown
         self.pin = pin
 
     def get(self):
         """ Get the current state of the GPIO pin. Returns true/false to indicate high/low """
         return self.get_func()
-
-    def close(self):
-        """ Do additional shutdown things, if necessary """
-        if self.additional_shutdown is not None:
-            self.additional_shutdown()
 
 
 def _configure_input(pin, device: str, bus):
@@ -130,58 +125,35 @@ def _configure_input(pin, device: str, bus):
 
     # Run through our options, configure the generic input interfaces, and then return.
     if device in ('pi', 'jetson'):
-        # These use the same pinout and can use the same driver (we'll use pigpio), so our lives
-        # just got easier
-        if not _IMPORTED_PIGPIO:
-            rospy.logfatal("You want to control your device with pigpio, but it didn't import "
-                           "properly. Is it installed? Node will exit.")
-            sys.exit(2)
         return_input = _GenericInputPin(bus, int(pin))
         return_input.get_func = lambda: return_input.configured_pinbus_object.read(int(pin))
         return return_input
+
     if device == 'beaglebone':
-        if not _IMPORTED_ADAFRUIT_BBIO:
-            rospy.logfatal("You want to control your device using the Adafruit BeagleBone Black "
-                           "GPIO library, but it didn't import properly. Is it installed? Node "
-                           "will exit.")
-            sys.exit(2)
-        return _GenericInputPin(BBGPIO.setup(pin, BBGPIO.IN), BBGPIO.input(pin), BBGPIO.cleanup())
+        BBGPIO.setup(pin, BBGPIO.IN)
+        return _GenericInputPin(bus, pin, (lambda: BBGPIO.input(pin)))
+
     if device == 'onion':
-        if not _IMPORTED_ONION_GPIO:
-            rospy.logfatal("You want to control your device using the Onion Omega "
-                           "GPIO library, but it didn't import properly. Is it installed? Node "
-                           "will exit.")
-            sys.exit(2)
-        return_input = _GenericInputPin(onionGpio.OnionGpio(pin), pin)
+        return_input = _GenericInputPin(bus, pin)
         return_input.configured_pinbus_object.setInputDirection()
         return_input.get_func = return_input.configured_pinbus_object.getValue
         return return_input
-    if device == 'generic':
-        rospy.logwarn('You are using the generic GPIO controller, which operates using the Linux '
-                      'FHS to control GPIO states. It should not be considered as stable or safe '
-                      'as non-generic options.')
 
-        def open_pin():
-            exporter = open('/sys/class/gpio/export', 'w')
-            exporter.write(str(pin))
-            exporter.close()
-            direction = open('/sys/class/gpio' + str(pin) + '/direction', 'w')
-            direction.write('in')
-            direction.close()
+    if device == 'generic':
+        exporter = open('/sys/class/gpio/export', 'w')
+        exporter.write(str(pin))
+        exporter.close()
+        direction = open('/sys/class/gpio' + str(pin) + '/direction', 'w')
+        direction.write('in')
+        direction.close()
 
         def get_pin():
             pass
 
-        def close_pin():
-            unexporter = open('/sys/class/gpio/unexport', 'w')
-            unexporter.write(str(pin))
-            unexporter.close()
+        return _GenericInputPin(bus, pin, get_pin)
 
-        return _GenericInputPin(open_pin,
-                                get_pin,
-                                additional_shutdown=close_pin)
     if device == 'simulated':
-        return _GenericInputPin(None, pin, get_=(lambda: True))
+        return _GenericInputPin(None, pin, get_=(lambda: random.choice([True, False])))
 
     raise RuntimeError('Device was invalid: ' + device)
 
@@ -194,43 +166,35 @@ def _configure_output(pin: int, device: str, bus):
     if device in ('pi', 'jetson'):
         # as with configure_input, we can use pigpio for both
         return_output = _GenericOutputPin(bus, pin)
-        return_output.set_low_func = (lambda: return_output.configured_pinbus_object.write(int(pin), pigpio.LOW))
-        return_output.set_high_func = (lambda: return_output.configured_pinbus_object.write(int(pin), pigpio.HIGH))
+        return_output.set_low_func = (
+            lambda: return_output.configured_pinbus_object.write(int(pin), pigpio.LOW)
+        )
+        return_output.set_high_func = (
+            lambda: return_output.configured_pinbus_object.write(int(pin), pigpio.HIGH)
+        )
         return return_output
-    if device == 'beaglebone':
-        if not _IMPORTED_ADAFRUIT_BBIO:
-            rospy.logfatal("You want to control your device using the Adafruit BeagleBone Black "
-                           "GPIO library, but it didn't import properly. Is it installed? Node "
-                           "will exit.")
-            sys.exit(2)
-        return _GenericOutputPin(
-            BBGPIO.setup(pin, BBGPIO.OUT),
-            BBGPIO.output(pin, BBGPIO.LOW),
-            BBGPIO.output(pin, BBGPIO.HIGH),
-            BBGPIO.cleanup())
-    if device == 'onion':
-        # as with configure_input, we can use pigpio for both
-        if not _IMPORTED_PIGPIO:
-            rospy.logfatal("You want to control your device with pigpio, but it didn't import "
-                           "properly. Node will exit.")
-            sys.exit(2)
-        return_output = _GenericOutputPin(bus, pin)
-        return_output.configured_pinbus_object.setOutputDirection()
-        return_output.set_low_func = return_output.configured_pinbus_object.setValue(0)
-        return_output.set_high_func = return_output.configured_pinbus_object.setValue(1)
-        return return_output
-    if device == 'generic':
-        rospy.logwarn('You are using the generic GPIO controller, which operates using the Linux '
-                      'FHS to control GPIO states. It should not be considered as stable or safe '
-                      'as non-generic options.')
 
-        def open_pin():
-            exporter = open('/sys/class/gpio/export', 'w')
-            exporter.write(str(pin))
-            exporter.close()
-            direction = open('/sys/class/gpio' + str(pin) + '/direction', 'w')
-            direction.write('in')
-            direction.close()
+    if device == 'beaglebone':
+        return _GenericOutputPin(
+            lambda: BBGPIO.setup(pin, BBGPIO.OUT),
+            lambda: BBGPIO.output(pin, BBGPIO.LOW),
+            lambda: BBGPIO.output(pin, BBGPIO.HIGH),
+        )
+
+    if device == 'onion':
+        return_output = _GenericOutputPin(onionGpio.OnionGpio(pin), pin)
+        return_output.configured_pinbus_object.setOutputDirection()
+        return_output.set_low_func = lambda: return_output.configured_pinbus_object.setValue(0)
+        return_output.set_high_func = lambda: return_output.configured_pinbus_object.setValue(1)
+        return return_output
+
+    if device == 'generic':
+        exporter = open('/sys/class/gpio/export', 'w')
+        exporter.write(str(pin))
+        exporter.close()
+        direction = open('/sys/class/gpio' + str(pin) + '/direction', 'w')
+        direction.write('in')
+        direction.close()
 
         def set_low():
             pass
@@ -238,24 +202,24 @@ def _configure_output(pin: int, device: str, bus):
         def set_high():
             pass
 
-        def close_pin():
-            unexporter = open('/sys/class/gpio/unexport', 'w')
-            unexporter.write(str(pin))
-            unexporter.close()
-
-        return _GenericOutputPin(open_pin(), set_low(), set_high(), additional_shutdown=close_pin())
+        return _GenericOutputPin(None, set_low, set_high)
 
     if device == 'simulated':
         return _GenericOutputPin(None, pin, set_high_=(lambda: print("[simulated] high!")),
                                  set_low_=(lambda: print("[simulated] low!")))
+
     raise RuntimeError('Device was invalid: ' + device)
 
 
 def _to_valid_ros_topic_name(input_string):
-    """ Convert input to a valid ROS name (alphabetic)"""
+    """
+    Convert input to a valid ROS name (alphabetic). This is necessary because ROS best practice is
+    to have topic names be only alphabetic (hyphens/slashes optional). Most GPIO pins will have
+    numbers in them, which can be an issue.
+    """
 
     # Don't bother dealing with things that are just numbers, convert them right away
-    if type(input_string) == int or input_string.isnumeric():
+    if isinstance(input_string) == int or input_string.isnumeric():
         return num2word.word(int(input_string)).lower()
 
     # If it's alphabetic, convert numbers to characters, append numbers, and separate the
@@ -283,27 +247,55 @@ def _to_valid_ros_topic_name(input_string):
     return output_string
 
 
-class output_pin_subscriber:
-    def __init__(self, output_pin):
-        self._output_pin = output_pin
-
-    def subscriber_callback(self, msg):
-        if msg.state:
-            self._output_pin.set_high_func()
-        elif not msg.state:
-            self._output_pin.set_low_func()
-        else:
-            rospy.logerr("Not sure how to deal with " + str(msg))
-
-
 def configure_bus(device):
+    """
+    Configure a GPIO bus for the specific hardware we're dealing with. Return an object of the
+    appropriate hardware type, if the specific implementation requires that.
+    """
     # Both the Pi and Jetson have the same pinout and can use the same lib.
     if device in ('pi', 'jetson'):
         if not _IMPORTED_PIGPIO:
             rospy.logfatal("You want to control your device with pigpio, but it didn't import "
                            "properly. Node will exit.")
             sys.exit(2)
+
         return pigpio.pi()
+
+    if device == 'beaglebone':
+        if not _IMPORTED_ADAFRUIT_BBIO:
+            rospy.logfatal("You want to control your device using the Adafruit BeagleBone Black "
+                           "GPIO library, but it didn't import properly. Is it installed? Node "
+                           "will exit.")
+            sys.exit(2)
+
+    if device == 'onion':
+        if not _IMPORTED_ONION_GPIO:
+            rospy.logfatal("You want to control your device using the Onion Omega "
+                           "GPIO library, but it didn't import properly. Is it installed? Node "
+                           "will exit.")
+            sys.exit(2)
+
+    if device == 'filesystem':
+        rospy.logwarn('You are using the generic GPIO controller, which operates using the Linux '
+                      'FHS to control GPIO states. It should not be considered as stable or safe '
+                      'as non-generic options.')
+
+    return None
+
+
+def configure_cleanup(device):
+    """
+    If the device in question requires cleanup functions, give them a run.
+    """
+    if device == 'beaglebone':
+        return BBGPIO.cleanup()
+
+    if device == 'filesystem':
+        unexporter = open('/sys/class/gpio/unexport', 'w')
+        # unexporter.write(str(pin)) # todo: make this a 'foreach' in gpio dir
+        unexporter.close()
+
+    return None
 
 
 class GpioControl:
@@ -317,6 +309,7 @@ class GpioControl:
         self._generic_pin_objects = {}
         self._subscribers = {}
         self._bus = configure_bus(device)
+        self._cleanup = configure_cleanup(device)
 
         if device not in VALID_DEVICES:
             rospy.logerr("I don't know that device (" + device + "). Valid devices: " +
@@ -339,11 +332,22 @@ class GpioControl:
         """ Add a pin to perform output IO operations. """
         output_pin_obj = _configure_output(pin, self._device, self._bus)
 
+        def subscriber_callback(msg):
+            """
+            Subscriber callback.
+            Called every time a message comes in telling us to change a pin state.
+            """
+            if msg.state:
+                output_pin_obj.set_high_func()
+            elif not msg.state:
+                output_pin_obj.set_low_func()
+            else:
+                rospy.logerr("Not sure how to deal with " + str(msg))
+
         self._generic_pin_objects[pin] = output_pin_obj
-        this_subscriber = output_pin_subscriber(output_pin_obj)
         self._subscribers[pin] = rospy.Subscriber("gpio_outputs/" + _to_valid_ros_topic_name(pin),
                                                   OutputState,
-                                                  this_subscriber.subscriber_callback)
+                                                  subscriber_callback)
 
     def spin(self, rate_val: int = None):
         """ Wrapping the spinner function. """
@@ -370,9 +374,9 @@ class GpioControl:
                         self._publishers[str(pin_obj.pin)].publish(
                             InputState(header, val, str(pin_obj.pin))
                         )
-                    except KeyError as e:
+                    except KeyError:
                         rospy.logfatal_once("KeyError, you tried getting " +
-                                            str(pin_obj.pin)+" but only " +
+                                            str(pin_obj.pin) + " but only " +
                                             str(self._publishers.keys()) +
                                             " is acceptable")
 
