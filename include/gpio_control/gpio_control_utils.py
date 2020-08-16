@@ -16,8 +16,11 @@ obligated to provide attribution, but it would be greatly appreciated.
 """
 
 # core stuff
+import os
 import random
+import subprocess
 import sys
+
 import rospy
 
 # putting the pin number (e.g., 12) in the topic name is invalid in ROS, so convert it to
@@ -140,17 +143,16 @@ def _configure_input(pin, device: str, bus):
         return return_input
 
     if device == 'generic':
-        exporter = open('/sys/class/gpio/export', 'w')
-        exporter.write(str(pin))
-        exporter.close()
-        direction = open('/sys/class/gpio' + str(pin) + '/direction', 'w')
-        direction.write('in')
-        direction.close()
+        # fixme: o boy do i hate this implementation
+        os.system('echo ' + str(pin) + ' > /sys/class/gpio/export')
+        os.system('echo in > /sys/class/gpio/gpio' + str(pin) + '/direction')
 
-        def get_pin():
-            pass
-
-        return _GenericInputPin(bus, pin, get_pin)
+        return _GenericInputPin(bus,
+                                pin,
+                                lambda: int(subprocess.check_output(
+                                    ['cat', '/sys/class/gpio/gpio' + str(pin) + '/value']
+                                ).decode("utf-8"))
+                                )
 
     if device == 'simulated':
         return _GenericInputPin(None, pin, get_=(lambda: random.choice([True, False])))
@@ -189,20 +191,17 @@ def _configure_output(pin: int, device: str, bus):
         return return_output
 
     if device == 'generic':
-        exporter = open('/sys/class/gpio/export', 'w')
-        exporter.write(str(pin))
-        exporter.close()
-        direction = open('/sys/class/gpio' + str(pin) + '/direction', 'w')
-        direction.write('in')
-        direction.close()
+        # fixme: o boy do i hate this implementation
+        os.system('echo ' + str(pin) + ' > /sys/class/gpio/export')
+        os.system('echo out > /sys/class/gpio/gpio' + str(pin) + '/direction')
 
-        def set_low():
-            pass
-
-        def set_high():
-            pass
-
-        return _GenericOutputPin(None, set_low, set_high)
+        return _GenericOutputPin(None,
+                                 pin,
+                                 set_low_=lambda: os.system(
+                                     'echo 0 > /sys/class/gpio/gpio' + str(pin) + '/value'),
+                                 set_high_=lambda: os.system(
+                                     'echo 1 > /sys/class/gpio/gpio' + str(pin) + '/value')
+                                 )
 
     if device == 'simulated':
         return _GenericOutputPin(None, pin, set_high_=(lambda: print("[simulated] high!")),
@@ -219,7 +218,7 @@ def _to_valid_ros_topic_name(input_string):
     """
 
     # Don't bother dealing with things that are just numbers, convert them right away
-    if isinstance(input_string) == int or input_string.isnumeric():
+    if isinstance(input_string, int) or input_string.isnumeric():
         return num2word.word(int(input_string)).lower()
 
     # If it's alphabetic, convert numbers to characters, append numbers, and separate the
@@ -275,7 +274,7 @@ def configure_bus(device):
                            "will exit.")
             sys.exit(2)
 
-    if device == 'filesystem':
+    if device == 'generic':
         rospy.logwarn('You are using the generic GPIO controller, which operates using the Linux '
                       'FHS to control GPIO states. It should not be considered as stable or safe '
                       'as non-generic options.')
@@ -290,7 +289,7 @@ def configure_cleanup(device):
     if device == 'beaglebone':
         return BBGPIO.cleanup()
 
-    if device == 'filesystem':
+    if device == 'generic':
         unexporter = open('/sys/class/gpio/unexport', 'w')
         # unexporter.write(str(pin)) # todo: make this a 'foreach' in gpio dir
         unexporter.close()
@@ -315,10 +314,6 @@ class GpioControl:
             rospy.logerr("I don't know that device (" + device + "). Valid devices: " +
                          str(VALID_DEVICES) + "\nExiting.")
             sys.exit(1)
-
-    def __del__(self):
-        for pin_obj in self._generic_pin_objects.values():
-            pin_obj.close()
 
     def add_input_pin(self, pin):
         """ Add a pin to perform input IO operations. """
@@ -363,9 +358,11 @@ class GpioControl:
 
                     header = Header()
                     header.stamp = rospy.Time.now()
-                    if val or val == 1:
+                    # Different implementations might give us this in int or bool form.
+                    # Check both and do the appropriate thing with each.
+                    if (isinstance(val, int) and val == 1) or (isinstance(val, bool) and val):
                         val = True
-                    elif val or val == 0:
+                    elif (isinstance(val, int) and val == 0) or (isinstance(val, bool) and not val):
                         val = False
                     else:
                         rospy.logerr("Not sure how to deal with " + str(val))
