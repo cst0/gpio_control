@@ -24,13 +24,17 @@ import rospy
 import num2word
 
 # messages
-from gpio_control.msg import InputState, OutputState
 from std_msgs.msg import Header
+from gpio_control.msg import InputState, OutputState
 
-# A list of devices we have support for
+# constants
+# a list of devices we have support for
 VALID_DEVICES = ['pi', 'jetson', 'beaglebone', 'onion', 'generic', 'simulated']
+# rate at which to run the node (be default)
+_DEFAULT_RATE_VAL = 10
 
-# Valid imports are going to depend on our hardware and what's installed. We'll try to import
+# more Imports
+# valid imports are going to depend on our hardware and what's installed. We'll try to import
 # everything we might use, and if we fail, keep track of it for later.
 _IMPORTED_PIGPIO = False
 _IMPORTED_ADAFRUIT_BBIO = False
@@ -38,21 +42,18 @@ _IMPORTED_ONION_GPIO = False
 
 try:
     import pigpio
-
     _IMPORTED_PIGPIO = True
 except ImportError:
     pass
 
 try:
     import Adafruit_BBIO.GPIO as BBGPIO
-
     _IMPORTED_ADAFRUIT_BBIO = True
 except ImportError:
     pass
 
 try:
     import onionGpio
-
     _IMPORTED_ONION_GPIO = True
 except ImportError:
     pass
@@ -277,20 +278,20 @@ def _configure_subscriber(_output_pin: _GenericOutputPin, pin: int):
     First, we'll set up a function to be the callback for the subscriber.
     """
 
-    def subscriber_callback(msg):
-        if msg.state:
-            _output_pin.set_high_func()
-        elif not msg.state:
-            _output_pin.set_low_func()
-        else:
-            rospy.logerr("Not sure how to deal with " + str(msg))
+    class subscriber_class:
+        def subscriber_callback(self, msg):
+            if msg.state:
+                _output_pin.set_high_func()
+            elif not msg.state:
+                _output_pin.set_low_func()
+            else:
+                rospy.logerr("Not sure how to deal with " + str(msg))
 
     # Create a subscriber, where the name is gpio_outputs plus the name of the pin
-    rospy.Subscriber("gpio_outputs/" + num2word.word(pin).lower(),
+    this_subscriber = subscriber_class()
+    return rospy.Subscriber("gpio_outputs/" + num2word.word(pin).lower(),
                      OutputState,
-                     subscriber_callback)
-
-    return rospy.spin()
+                     this_subscriber.subscriber_callback)
 
 
 class GpioControl:
@@ -301,7 +302,7 @@ class GpioControl:
     def __init__(self, device: str):
         self._device = device
         self._publishers = {}
-        self.generic_pin_objects = {}
+        self._generic_pin_objects = {}
         self._subscribers = []
 
         if device not in VALID_DEVICES:
@@ -310,29 +311,30 @@ class GpioControl:
             sys.exit(1)
 
     def __del__(self):
-        for pin_obj in self.generic_pin_objects.values():
+        for pin_obj in self._generic_pin_objects.values():
             pin_obj.close()
 
-    def add_pin(self, is_input: bool, pin_num: int = None, pin_name: str = None):
-        """ Add a pin to perform IO operations. """
-        pin = pin_num if pin_num is not None else pin_name
+    def add_input_pin(self, pin):
+        """ Add a pin to perform input IO operations. """
+        input_pin_obj = _configure_input(pin, self._device)
+        self._generic_pin_objects[pin] = input_pin_obj
+        self._publishers[pin] = _configure_publisher(input_pin_obj, pin)
 
-        if is_input:  # if we're an input, configure as an input and set up a publisher
-            input_pin_obj = _configure_input(pin, self._device)
-            self.generic_pin_objects[pin] = input_pin_obj
-            self._publishers[pin] = _configure_publisher(input_pin_obj, pin)
-        else:  # if we're an output, configure as an output and set up a subscriber
-            output_pin_obj = _configure_output(pin, self._device)
-            self.generic_pin_objects[pin] = output_pin_obj
-            self._subscribers.append(_configure_subscriber(output_pin_obj, pin))
+    def add_output_pin(self, pin):
+        """ Add a pin to perform output IO operations. """
+        output_pin_obj = _configure_output(pin, self._device)
+        self._generic_pin_objects[pin] = output_pin_obj
+        self._subscribers.append(_configure_subscriber(output_pin_obj, pin))
 
-    def spin(self, rate_val: int = 10):
+    def spin(self, rate_val: int = None):
         """ Wrapping the spinner function. """
         # Here's where we're doing the actual spinning: read the pin, set up a message, publish,
         # rate.sleep(), repeat.
-        rate = rospy.Rate(10)  # fixme
+        if rate_val is None:
+            rate_val = _DEFAULT_RATE_VAL
+        rate = rospy.Rate(rate_val)
         while not rospy.is_shutdown():
-            for pin_obj in self.generic_pin_objects.values():
+            for pin_obj in self._generic_pin_objects.values():
                 if pin_obj.type == 'input':
                     val = pin_obj.get()
 
@@ -353,12 +355,12 @@ class GpioControl:
         """
         If using this code as an import, provide a simple function to set the pin.
         """
-        if pin not in self.generic_pin_objects.keys():
+        if pin not in self._generic_pin_objects.keys():
             rospy.logerr("The pin you requested (" + str(pin) +
                          ") isn't in the list of ones we know about: " +
-                         str(self.generic_pin_objects.keys()))
+                         str(self._generic_pin_objects.keys()))
 
-        if not self.generic_pin_objects[pin].type == 'output':
+        if not self._generic_pin_objects[pin].type == 'output':
             raise EnvironmentError("This pin is not an output! Can't set the state.")
 
         if state:
@@ -370,12 +372,12 @@ class GpioControl:
         """
         If using this code as an import, provide a simple function to get the state of the pin.
         """
-        if pin not in self.generic_pin_objects.keys():
+        if pin not in self._generic_pin_objects.keys():
             rospy.logerr("The pin you requested (" + str(pin) +
                          ") isn't in the list of ones we know about: " +
-                         str(self.generic_pin_objects.keys()))
+                         str(self._generic_pin_objects.keys()))
 
-        if not self.generic_pin_objects[pin].type == 'output':
+        if not self._generic_pin_objects[pin].type == 'output':
             raise EnvironmentError("This pin is not an output! Can't set the state.")
 
         return pin.get()
