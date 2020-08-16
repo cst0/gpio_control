@@ -73,10 +73,10 @@ class _GenericOutputPin:
     please feel free to open an issue on the tracker so I can work with you on that.
     """
 
-    def __init__(self, configure, pin, set_high_=None, set_low_=None, additional_shutdown=None):
+    def __init__(self, configured_pinbus_object, pin, set_high_=None, set_low_=None, additional_shutdown=None):
         self.type = 'output'
-        if configure is not None:
-            self.obj = configure()
+        if configured_pinbus_object is not None:
+            self.configured_pinbus_object = configured_pinbus_object
         self.set_high_func = set_high_
         self.set_low_func = set_low_
         self.additional_shutdown = additional_shutdown
@@ -104,10 +104,10 @@ class _GenericInputPin:
     As before, takes in functions to be called later.
     """
 
-    def __init__(self, configure, pin, get_=None, additional_shutdown=None):
+    def __init__(self, configured_pinbus_object, pin, get_=None, additional_shutdown=None):
         self.type = 'input'
-        if configure is not None:
-            self.obj = configure()
+        if configured_pinbus_object is not None:
+            self.configured_pinbus_object = configured_pinbus_object
         self.get_func = get_
         self.additional_shutdown = additional_shutdown
         self.pin = pin
@@ -122,7 +122,7 @@ class _GenericInputPin:
             self.additional_shutdown()
 
 
-def _configure_input(pin, device: str):
+def _configure_input(pin, device: str, bus):
     """
     Configure the node as an input. Takes in a pin to access, and a string which is what was
     passed in at the command line.
@@ -136,8 +136,8 @@ def _configure_input(pin, device: str):
             rospy.logfatal("You want to control your device with pigpio, but it didn't import "
                            "properly. Is it installed? Node will exit.")
             sys.exit(2)
-        return_input = _GenericInputPin(pigpio.pi(), pin)
-        return_input.get_func = return_input.obj.read(pin)
+        return_input = _GenericInputPin(bus, int(pin))
+        return_input.get_func = lambda: return_input.configured_pinbus_object.read(int(pin))
         return return_input
     if device == 'beaglebone':
         if not _IMPORTED_ADAFRUIT_BBIO:
@@ -153,8 +153,8 @@ def _configure_input(pin, device: str):
                            "will exit.")
             sys.exit(2)
         return_input = _GenericInputPin(onionGpio.OnionGpio(pin), pin)
-        return_input.obj.setInputDirection()
-        return_input.get_func = return_input.obj.getValue
+        return_input.configured_pinbus_object.setInputDirection()
+        return_input.get_func = return_input.configured_pinbus_object.getValue
         return return_input
     if device == 'generic':
         rospy.logwarn('You are using the generic GPIO controller, which operates using the Linux '
@@ -186,20 +186,16 @@ def _configure_input(pin, device: str):
     raise RuntimeError('Device was invalid: ' + device)
 
 
-def _configure_output(pin: int, device: str):
+def _configure_output(pin: int, device: str, bus):
     """
     Configure the node as an output. Takes in a pin to access, and a string which is what was
     passed in at the command line.
     """
     if device in ('pi', 'jetson'):
         # as with configure_input, we can use pigpio for both
-        if not _IMPORTED_PIGPIO:
-            rospy.logfatal("You want to control your device with pigpio, but it didn't import "
-                           "properly. Node will exit.")
-            sys.exit(2)
-        return_output = _GenericOutputPin(pigpio.pi(), pin)
-        return_output.set_low_func = return_output.obj.write(pin, pigpio.LOW)
-        return_output.set_high_func = return_output.obj.write(pin, pigpio.HIGH)
+        return_output = _GenericOutputPin(bus, pin)
+        return_output.set_low_func = (lambda: return_output.configured_pinbus_object.write(int(pin), pigpio.LOW))
+        return_output.set_high_func = (lambda: return_output.configured_pinbus_object.write(int(pin), pigpio.HIGH))
         return return_output
     if device == 'beaglebone':
         if not _IMPORTED_ADAFRUIT_BBIO:
@@ -218,10 +214,10 @@ def _configure_output(pin: int, device: str):
             rospy.logfatal("You want to control your device with pigpio, but it didn't import "
                            "properly. Node will exit.")
             sys.exit(2)
-        return_output = _GenericOutputPin(onionGpio.OnionGpio(pin), pin)
-        return_output.obj.setOutputDirection()
-        return_output.set_low_func = return_output.obj.setValue(0)
-        return_output.set_high_func = return_output.obj.setValue(1)
+        return_output = _GenericOutputPin(bus, pin)
+        return_output.configured_pinbus_object.setOutputDirection()
+        return_output.set_low_func = return_output.configured_pinbus_object.setValue(0)
+        return_output.set_high_func = return_output.configured_pinbus_object.setValue(1)
         return return_output
     if device == 'generic':
         rospy.logwarn('You are using the generic GPIO controller, which operates using the Linux '
@@ -287,14 +283,6 @@ def _to_valid_ros_topic_name(input_string):
     return output_string
 
 
-def _configure_subscriber(_output_pin: _GenericOutputPin, pin):
-    """
-    Set up a subscriber, which we'll be using to receive a new state to set the GPIO pin to.
-
-    First, we'll set up a function to be the callback for the subscriber.
-    """
-
-
 class output_pin_subscriber:
     def __init__(self, output_pin):
         self._output_pin = output_pin
@@ -308,6 +296,16 @@ class output_pin_subscriber:
             rospy.logerr("Not sure how to deal with " + str(msg))
 
 
+def configure_bus(device):
+    # Both the Pi and Jetson have the same pinout and can use the same lib.
+    if device in ('pi', 'jetson'):
+        if not _IMPORTED_PIGPIO:
+            rospy.logfatal("You want to control your device with pigpio, but it didn't import "
+                           "properly. Node will exit.")
+            sys.exit(2)
+        return pigpio.pi()
+
+
 class GpioControl:
     """
     Generic control of a GPIO device. Wraps the setup and then provides a spinner to run.
@@ -318,6 +316,7 @@ class GpioControl:
         self._publishers = {}
         self._generic_pin_objects = {}
         self._subscribers = {}
+        self._bus = configure_bus(device)
 
         if device not in VALID_DEVICES:
             rospy.logerr("I don't know that device (" + device + "). Valid devices: " +
@@ -330,7 +329,7 @@ class GpioControl:
 
     def add_input_pin(self, pin):
         """ Add a pin to perform input IO operations. """
-        input_pin_obj = _configure_input(pin, self._device)
+        input_pin_obj = _configure_input(pin, self._device, self._bus)
         self._generic_pin_objects[pin] = input_pin_obj
         self._publishers[pin] = rospy.Publisher("gpio_inputs/" + _to_valid_ros_topic_name(pin),
                                                 InputState,
@@ -338,7 +337,7 @@ class GpioControl:
 
     def add_output_pin(self, pin):
         """ Add a pin to perform output IO operations. """
-        output_pin_obj = _configure_output(pin, self._device)
+        output_pin_obj = _configure_output(pin, self._device, self._bus)
 
         self._generic_pin_objects[pin] = output_pin_obj
         this_subscriber = output_pin_subscriber(output_pin_obj)
@@ -367,7 +366,15 @@ class GpioControl:
                     else:
                         rospy.logerr("Not sure how to deal with " + str(val))
 
-                    self._publishers[pin_obj.pin].publish(InputState(header, val, str(pin_obj.pin)))
+                    try:
+                        self._publishers[str(pin_obj.pin)].publish(
+                            InputState(header, val, str(pin_obj.pin))
+                        )
+                    except KeyError as e:
+                        rospy.logfatal_once("KeyError, you tried getting " +
+                                            str(pin_obj.pin)+" but only " +
+                                            str(self._publishers.keys()) +
+                                            " is acceptable")
 
             rate.sleep()
 

@@ -46,7 +46,9 @@ def check_valid_args(local_args):
         rospy.logwarn("No device was specified, so we're assuming nothing and closing.")
         sys.exit(1)
     if not local_args.input and not local_args.output:
-        rospy.logerr("Is this an input or an output? Specify using --input or --output.")
+        rospy.logerr("No inputs or outputs specified, so nothing to do here and closing. Provide "
+                     "pins to manipulate using --input or --output. See --help for more "
+                     "information.")
         sys.exit(1)
 
 
@@ -56,16 +58,33 @@ if __name__ == '__main__':
     check_valid_args(args)
 
     rospy.init_node("gpio_pin_controller", anonymous=False)
-    rospy.loginfo("Hello! Setting up to control GPIO pins as inputs: " +
-                  str(args.input) + " and as outputs: " + str(args.output))
+
+    # Set up a string to inform the user as to what this node will try to do
+    intro_string = "Hello! Setting up to control GPIO pins "
+    if args.input is not None:
+        intro_string += str(args.input) + " as inputs"
+        if args.output is not None:
+            # only bother saying 'and' if there's any pins to do that for
+            intro_string += ", and pins "
+    if args.output is not None:
+        intro_string += str(args.output) + " as outputs"
+    intro_string += "."
+    rospy.loginfo(intro_string)
 
     gpio = GpioControl(args.device)
-    for input_pin in args.input:
-        gpio.add_input_pin(input_pin)
+    if args.input is not None:
+        for input_pin in args.input:
+            gpio.add_input_pin(input_pin)
+    else:
+        args.input = []  # be an empty list, not None
 
-    for output_pin in args.output:
-        gpio.add_output_pin(output_pin)
+    if args.output is not None:
+        for output_pin in args.output:
+            gpio.add_output_pin(output_pin)
+    else:
+        args.output = []  # be an empty list, not None
 
+    rospy.loginfo("All set up! Ready to accept commands for outputs and provide updates on inputs.")
     gpio.spin(args.rate)
 
     rospy.loginfo("Manager for GPIO pins " +
