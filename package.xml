@@ -6,7 +6,7 @@
 
   <maintainer email="christopher.thierauf@tufts.edu">cst</maintainer>
   <license>Apache 2.0</license>
-  <url type="website">https://github.com/cst0/gpio_control-release</url>
+  <url type="website">https://github.com/cst0/gpio_control</url>
 
   <build_depend>message_generation</build_depend>
   <build_depend>rospy</build_depend>
