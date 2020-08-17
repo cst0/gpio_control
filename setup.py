@@ -11,5 +11,5 @@ d = generate_distutils_setup(
     packages=['gpio_control'],
     package_dir={'': 'include'},
 )
-# scripts = ['scripts/noroot-gpio.sh']
+
 setup(**d)

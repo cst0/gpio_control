@@ -13,39 +13,29 @@ and on ROS Kinetic running on the Raspberry Pi 3 B+, but has been designed with 
 ROS versions in mind. Please file an issue if this package does not behave as expected. Bug fixes 
 and contributions, especially ones which support new devices, are welcomed.
 
-The `gpio_control` node allows for control of GPIO through the standard Linux /dev/sys/gpio
-directories, allowing for support of virtually every Linux device with GPIO pins. Additionally,
-devices such as the Raspberry Pi, which have their own GPIO software API, are supported via this
-API in the same node. `gpio_control_utils.py` provides the backbone for this node, and can also
-be imported to provide 
+The `gpio_control_node` node allows for control of the GPIO of generic Linux systems. This is done
+through the standard Linux /dev/sys/gpio filesystem, and therefore allows for support of all
+Linux devices with GPIO pins which conform to this standard. This can be specified using the
+`--device generic` flag.
+
+Additionally, devices such as the Raspberry Pi, which have their own GPIO software API, are
+supported via this API in the same node. `gpio_control_utils.py` provides the backbone for this
+node, and can also be imported to provide standardized GPIO control across the variety of
+machines this package supports. See the section on 'gpio_control_utils' for more information.
 
 NOTE: Writing GPIO control states via the filesystem may include writing to pins which are in use
 by the operating system, which can have unexpected consequences (loss of SD card data, crashes, etc).
 It is recommended that you use the device-specific flag, which will perform safety checks and prevent
 you from doing anything too damaging. There are device specific flags for the Raspberry Pi's (`--device pi`),
-Nvidia Jetson's (`--device jetson`), BeagleBone Black (`--device beaglebone`), and Onion Omega (`--device onion`).
+Nvidia Jetson's (`--device jetson`), BeagleBone Black (`--device beaglebone-experimental`),
+and Onion Omega (`--device onion-experimental`).
 
-WARNING: Installation of this node will allow for non-root users to control GPIO pins on your device. This may be
-considered a security risk, and so deployment in a production environment is not recommended. Alternatively, you may run
-ROS as root, but that has its own set of security risks. Consider running just this node as root using `launch-prefix="sudo"`
-in your roslaunch file if that's the route you'd like to go.
+The final device flag is in the form of `--device simulated`. This flag prevents any actual hardware
+manipulation, which makes it useful for running nodes in simulation. 
 
-## Installation
-Clone this package into your catkin workspace and then build it:
-
-```
-cd catkin_ws/src
-git clone https://github.com/cst0/gpio_control
-catkin_make
-```
-
-You will then need to run the non-root GPIO script, which will configure your GPIO pins to allow access from non-root users:
-
-```
-sudo src/gpio_control/scripts/non-root-gpio.sh
-```
-
-Optionally, skip this step if you intent to run ROS as root.
+Python dependencies should already be installed if you are using a device-specific API on its
+official operating system. If they are not installed properly, the node will notice and provide
+some next steps for you to take.
 
 ## Usage
 Each node accepts the same command line parameters. In the following command, `gpio_control` is used
@@ -55,13 +45,29 @@ to create an input on pin 12 of the Raspberry Pi:
 rosrun gpio_control gpio_control --device pi --input 12
 ```
 
-Upon running this command, there should now be a topic titled '/gpio/input/12' which is publishing a `gpio_control/input` message.
+Upon running this command, there should now be a topic titled `/gpio_outputs/twelve` which
+is publishing a `gpio_control/InputState` message.
 
 Creating an output is similar:
 ```
 rosrun gpio_control gpio_control --device pi --output 12
 ```
 
-Upon running this command, there should now be a topic titled '/gpio/output/12' which will publish a `gpio_control/output` message
-upon a state change. However, it is also possible to publish the current state every cycle using the `--every-cycle` command. 
+Upon running this command, there should now be a topic titled `/gpio_outputs/twelve`
+which will publish a `gpio_control/OutputState` upon a state change. The rate at which
+the node will check for a state change can be specified using `--rate`. Alternatively,
+the current state of a pin can be published continuously at the rate using `--constant-publish`.
 
+It is possible to control multiple multiple pins with one node:
+```
+rosrun gpio_control gpio_control_node --device generic --output 12 13 14 --input 15 16 17
+```
+
+It is also possible to make a pin both an input and an output, depending on the device-specific
+implementation. This may be useful for error checking.
+
+## gpio_control_utils.py
+The `gpio_control_node` operates by providing a command line interface to the `gpio_control_utils`
+python package, which will be importable in other projects upon installation. This provides a
+standard and stable interface for reading and writing to GPIO pins. See the node for example
+usage.

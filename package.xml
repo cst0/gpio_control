@@ -2,7 +2,7 @@
 <package format="2">
   <name>gpio_control</name>
   <version>0.0.1</version>
-  <description>Control GPIO pins on Raspberry Pi, Nvidia Jetson, etc. from ROS</description>
+  <description>Control GPIO pins on Raspberry Pi, Nvidia Jetson, and other Linux devices with GPIO pins</description>
 
   <maintainer email="christopher.thierauf@tufts.edu">cst</maintainer>
   <license>Apache 2.0</license>

@@ -23,31 +23,41 @@ import sys
 
 import rospy
 
-# putting the pin number (e.g., 12) in the topic name is invalid in ROS, so convert it to
-# 'twelve' or whatever
-import num2word
-
 # messages
 from std_msgs.msg import Header
 from gpio_control.msg import InputState, OutputState
 
-# constants
 # a list of devices we have support for
-VALID_DEVICES = ['pi', 'jetson', 'beaglebone', 'onion', 'generic', 'simulated']
-# rate at which to run the node (be default)
+VALID_DEVICES = [
+    # pi support via pigpio
+    'pi',
+    # jetson support also via pigpio
+    'jetson',
+    # beaglebone support via Adafruit_BBIO
+    'beaglebone-experimental',
+    # onion support via onionGpio, though I don't know how popular an option this is.
+    'onion-experimental',
+    # Support of standard Linux systems via the LFS
+    'generic',
+    # Don't actually do anything, just print to the screen
+    'simulated'
+]
+
+# rate at which to run the node (by default)
 _DEFAULT_RATE_VAL = 10
 
-# more Imports
 # valid imports are going to depend on our hardware and what's installed. We'll try to import
 # everything we might use, and if we fail, keep track of it for later.
 _IMPORTED_PIGPIO = False
 _IMPORTED_ADAFRUIT_BBIO = False
 _IMPORTED_ONION_GPIO = False
+_IMPORTED_GPIO_API = False
 
 try:
     import pigpio
 
     _IMPORTED_PIGPIO = True
+    _IMPORTED_GPIO_API = True
 except ImportError:
     pass
 
@@ -55,6 +65,7 @@ try:
     import Adafruit_BBIO.GPIO as BBGPIO
 
     _IMPORTED_ADAFRUIT_BBIO = True
+    _IMPORTED_GPIO_API = True
 except ImportError:
     pass
 
@@ -62,8 +73,29 @@ try:
     import onionGpio
 
     _IMPORTED_ONION_GPIO = True
+    _IMPORTED_GPIO_API = True
 except ImportError:
     pass
+
+# This was originally done using the 'word2num' python package, but it's pretty simple
+# to implement via this stack overflow post:
+# https://stackoverflow.com/questions/19504350/how-to-convert-numbers-to-words-without-using-num2word-library#19504396
+# So we're removing a dependency here.
+_num2words1 = {1: 'One', 2: 'Two', 3: 'Three', 4: 'Four', 5: 'Five',
+               6: 'Six', 7: 'Seven', 8: 'Eight', 9: 'Nine', 10: 'Ten',
+               11: 'Eleven', 12: 'Twelve', 13: 'Thirteen', 14: 'Fourteen',
+               15: 'Fifteen', 16: 'Sixteen', 17: 'Seventeen', 18: 'Eighteen', 19: 'Nineteen'}
+_num2words2 = ['Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety']
+
+
+def _num2word(num: int):
+    if 0 <= num <= 19:
+        return _num2words1[num]
+    elif 20 <= num <= 99:
+        tens, remainder = divmod(num, 10)
+        return _num2words2[tens-2] + _num2words1[remainder] if remainder else _num2words2[tens-2]
+    else:
+        return _num2word(int(num/10)) + "_thousand"
 
 
 class _GenericOutputPin:
@@ -143,7 +175,7 @@ def _configure_input(pin, device: str, bus):
         return return_input
 
     if device == 'generic':
-        # fixme: o boy do i hate this implementation
+        # todo: o boy do i hate this implementation
         os.system('echo ' + str(pin) + ' > /sys/class/gpio/export')
         os.system('echo in > /sys/class/gpio/gpio' + str(pin) + '/direction')
 
@@ -191,7 +223,7 @@ def _configure_output(pin: int, device: str, bus):
         return return_output
 
     if device == 'generic':
-        # fixme: o boy do i hate this implementation
+        # todo: as above
         os.system('echo ' + str(pin) + ' > /sys/class/gpio/export')
         os.system('echo out > /sys/class/gpio/gpio' + str(pin) + '/direction')
 
@@ -219,7 +251,7 @@ def _to_valid_ros_topic_name(input_string):
 
     # Don't bother dealing with things that are just numbers, convert them right away
     if isinstance(input_string, int) or input_string.isnumeric():
-        return num2word.word(int(input_string)).lower()
+        return _num2word(int(input_string)).lower()
 
     # If it's alphabetic, convert numbers to characters, append numbers, and separate the
     # two using underscores. Creates something like P8U4 -> p_eight_u_4
@@ -237,7 +269,7 @@ def _to_valid_ros_topic_name(input_string):
             if just_did_str:
                 output_string += '_'
                 just_did_str = False
-            output_string += num2word.word(character).lower()
+            output_string += _num2word(character).lower()
             just_did_num = True
         else:
             # Don't bother putting in special characters (even though I don't think they'll come up)
@@ -261,6 +293,8 @@ def configure_bus(device):
         return pigpio.pi()
 
     if device == 'beaglebone':
+        rospy.loginfo("This implementation is currently in beta. If you encounter bugs, please "
+                      "report them!")
         if not _IMPORTED_ADAFRUIT_BBIO:
             rospy.logfatal("You want to control your device using the Adafruit BeagleBone Black "
                            "GPIO library, but it didn't import properly. Is it installed? Node "
@@ -268,6 +302,8 @@ def configure_bus(device):
             sys.exit(2)
 
     if device == 'onion':
+        rospy.loginfo("This implementation is currently in beta. If you encounter bugs, please "
+                      "report them!")
         if not _IMPORTED_ONION_GPIO:
             rospy.logfatal("You want to control your device using the Onion Omega "
                            "GPIO library, but it didn't import properly. Is it installed? Node "
@@ -291,7 +327,7 @@ def configure_cleanup(device):
 
     if device == 'generic':
         unexporter = open('/sys/class/gpio/unexport', 'w')
-        # unexporter.write(str(pin)) # todo: make this a 'foreach' in gpio dir
+        # unexporter.write(str(pin)) # todo: make this a 'foreach' in gpio dir. Nothing bad will happen if we don't (probably), it's just to be nice and clean up after ourselves.
         unexporter.close()
 
     return None
@@ -314,6 +350,17 @@ class GpioControl:
             rospy.logerr("I don't know that device (" + device + "). Valid devices: " +
                          str(VALID_DEVICES) + "\nExiting.")
             sys.exit(1)
+
+        if device not in ['generic', 'simulated'] and not _IMPORTED_GPIO_API:
+            rospy.logfatal("You're trying to use a device-specific API, but we weren't able to "
+                           "import the appropriate Python library. Please make sure that you have "
+                           "the right library installed properly:\n "
+                           "\t* Raspberry Pi: pigpio \n"
+                           "\t* Nvidia Jetson: pigpio\n"
+                           "\t* Beaglebone Black: Adafruit_BBIO\n"
+                           "\t* Onion Omega: onionGpio\n"
+                           "Cannot recover, exiting.")
+            sys.exit(3)
 
     def add_input_pin(self, pin):
         """ Add a pin to perform input IO operations. """
